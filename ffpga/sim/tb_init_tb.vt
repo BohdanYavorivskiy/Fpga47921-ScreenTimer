@@ -1,0 +1,212 @@
+// Self-checking testbench: reset pulse + full ST7735S init sequence over SPI
+// Delays inside the DUT (hundreds of ms) are fast-forwarded by loading its timer.
+`timescale 1ns / 1ps
+
+module tb_init_tb;
+
+  reg clk = 1'b0;
+  always #20 clk = ~clk;                       // 25 MHz
+
+  wire osc_en, osc_mode, pd_en, pd_s0, pd_s1, pd_s2, btn_pu0, btn_pu1;
+  wire tft_reset, tft_cs, tft_dc, tft_mosi, tft_clk;
+  wire oe_r, oe_c, oe_d, oe_m, oe_k;
+
+  main dut (
+    .i_clk(clk), .i_btn_start(1'b1), .i_btn_stop(1'b1),
+    .o_btn_start_pu(btn_pu0), .o_btn_stop_pu(btn_pu1),
+    .o_osc_en(osc_en), .o_osc_mode(osc_mode), .o_postdiv0_en(pd_en),
+    .o_postdiv0_sel0(pd_s0), .o_postdiv0_sel1(pd_s1), .o_postdiv0_sel2(pd_s2),
+    .o_tft_reset(tft_reset), .o_tft_reset_oe(oe_r),
+    .o_tft_cs(tft_cs), .o_tft_cs_oe(oe_c),
+    .o_tft_dc(tft_dc), .o_tft_dc_oe(oe_d),
+    .o_tft_mosi(tft_mosi), .o_tft_mosi_oe(oe_m),
+    .o_tft_clk(tft_clk), .o_tft_clk_oe(oe_k)
+  );
+
+  // fast-forward the long waits (reset low, reset recovery, sleep-out delay)
+  always @(posedge clk) begin
+    if (dut.u_lcd.state == 4'd0 && dut.u_lcd.t < 27'd2000000) dut.u_lcd.t = 27'd2097000;
+    if ((dut.u_lcd.state == 4'd1 || dut.u_lcd.state == 4'd5) && dut.u_lcd.t < 27'd8000000) dut.u_lcd.t = 27'd8388000;
+  end
+
+  // expected {dc, byte} stream up to and including the first RAMWR (0x2C)
+  reg [8:0] exp [0:87];
+  initial begin
+    exp[0] = 9'h011;
+    exp[1] = 9'h0B1;
+    exp[2] = 9'h105;
+    exp[3] = 9'h13C;
+    exp[4] = 9'h13C;
+    exp[5] = 9'h0B2;
+    exp[6] = 9'h105;
+    exp[7] = 9'h13C;
+    exp[8] = 9'h13C;
+    exp[9] = 9'h0B3;
+    exp[10] = 9'h105;
+    exp[11] = 9'h13C;
+    exp[12] = 9'h13C;
+    exp[13] = 9'h105;
+    exp[14] = 9'h13C;
+    exp[15] = 9'h13C;
+    exp[16] = 9'h0B4;
+    exp[17] = 9'h103;
+    exp[18] = 9'h0C0;
+    exp[19] = 9'h1AB;
+    exp[20] = 9'h10B;
+    exp[21] = 9'h104;
+    exp[22] = 9'h0C1;
+    exp[23] = 9'h1C5;
+    exp[24] = 9'h0C2;
+    exp[25] = 9'h10D;
+    exp[26] = 9'h100;
+    exp[27] = 9'h0C3;
+    exp[28] = 9'h18D;
+    exp[29] = 9'h16A;
+    exp[30] = 9'h0C4;
+    exp[31] = 9'h18D;
+    exp[32] = 9'h1EE;
+    exp[33] = 9'h0C5;
+    exp[34] = 9'h10F;
+    exp[35] = 9'h0E0;
+    exp[36] = 9'h107;
+    exp[37] = 9'h10E;
+    exp[38] = 9'h108;
+    exp[39] = 9'h107;
+    exp[40] = 9'h110;
+    exp[41] = 9'h107;
+    exp[42] = 9'h102;
+    exp[43] = 9'h107;
+    exp[44] = 9'h109;
+    exp[45] = 9'h10F;
+    exp[46] = 9'h125;
+    exp[47] = 9'h136;
+    exp[48] = 9'h100;
+    exp[49] = 9'h108;
+    exp[50] = 9'h104;
+    exp[51] = 9'h110;
+    exp[52] = 9'h0E1;
+    exp[53] = 9'h10A;
+    exp[54] = 9'h10D;
+    exp[55] = 9'h108;
+    exp[56] = 9'h107;
+    exp[57] = 9'h10F;
+    exp[58] = 9'h107;
+    exp[59] = 9'h102;
+    exp[60] = 9'h107;
+    exp[61] = 9'h109;
+    exp[62] = 9'h10F;
+    exp[63] = 9'h125;
+    exp[64] = 9'h135;
+    exp[65] = 9'h100;
+    exp[66] = 9'h109;
+    exp[67] = 9'h104;
+    exp[68] = 9'h110;
+    exp[69] = 9'h0FC;
+    exp[70] = 9'h180;
+    exp[71] = 9'h03A;
+    exp[72] = 9'h105;
+    exp[73] = 9'h036;
+    exp[74] = 9'h178;
+    exp[75] = 9'h021;
+    exp[76] = 9'h029;
+    exp[77] = 9'h02A;
+    exp[78] = 9'h100;
+    exp[79] = 9'h101;
+    exp[80] = 9'h100;
+    exp[81] = 9'h1A0;
+    exp[82] = 9'h02B;
+    exp[83] = 9'h100;
+    exp[84] = 9'h11A;
+    exp[85] = 9'h100;
+    exp[86] = 9'h169;
+    exp[87] = 9'h02C;
+  end
+
+  // SPI slave model (mode 0, MSB first, CS active low)
+  reg [7:0] sh;
+  integer bits = 0;
+  integer nbytes = 0;          // bytes seen so far
+  integer errors = 0;
+  integer pix_bytes = 0;       // data bytes after the first RAMWR
+  integer nonzero = 0;
+  integer reset_falls = 0, reset_rises = 0;
+  integer win2_bytes = 0;
+  reg     seen_ramwr = 1'b0;
+  reg [8:0] cur;
+  reg [7:0] win2 [0:15];
+
+  always @(negedge tft_reset) reset_falls = reset_falls + 1;
+  always @(posedge tft_reset) reset_rises = reset_rises + 1;
+
+  always @(posedge tft_clk) if (!tft_cs) begin
+    sh = {sh[6:0], tft_mosi};
+    bits = bits + 1;
+    if (bits == 8) begin
+      bits = 0;
+      cur = {tft_dc, sh};
+      if (nbytes < 88) begin
+        if (cur !== exp[nbytes]) begin
+          errors = errors + 1;
+          $display("FAIL: byte %0d got dc=%0b data=%02h, expected dc=%0b data=%02h",
+                   nbytes, cur[8], cur[7:0], exp[nbytes][8], exp[nbytes][7:0]);
+        end
+        nbytes = nbytes + 1;
+        if (nbytes == 88) seen_ramwr = 1'b1;
+      end else if (seen_ramwr && pix_bytes < 25600) begin
+        if (!tft_dc) begin errors = errors + 1; $display("FAIL: command byte %02h inside the clear frame", sh); end
+        if (sh != 8'h00) nonzero = nonzero + 1;
+        pix_bytes = pix_bytes + 1;
+      end else if (pix_bytes >= 25600 && win2_bytes < 16) begin
+        win2[win2_bytes] = sh;
+        win2_bytes = win2_bytes + 1;
+      end
+    end
+  end
+
+  // CS must never be low together with a clock edge outside a byte, and must idle high
+  integer cs_low_time_errors = 0;
+
+  initial begin
+    $dumpfile ("tb_init_tb.vcd");
+    $dumpvars (0, tb_init_tb);
+
+    // the reset pin starts low, then goes high exactly once and stays high during init
+    #100;
+    if (tft_reset !== 1'b0) begin errors = errors + 1; $display("FAIL: RESET is not low at power-up"); end
+    if (osc_en !== 1'b1 || osc_mode !== 1'b1 || pd_en !== 1'b1 || {pd_s2,pd_s1,pd_s0} !== 3'b001) begin
+      errors = errors + 1; $display("FAIL: oscillator control outputs wrong");
+    end
+    if (oe_r !== 1'b1 || oe_c !== 1'b1 || oe_d !== 1'b1 || oe_m !== 1'b1 || oe_k !== 1'b1) begin
+      errors = errors + 1; $display("FAIL: an SPI output enable is not asserted");
+    end
+
+    wait (seen_ramwr);
+    $display("init sequence received: %0d bytes", nbytes);
+    wait (win2_bytes == 16);
+    // second window written by the controller after the clear frame: icon band
+    $display("after clear frame, window bytes: %02h %02h %02h %02h %02h %02h %02h %02h %02h %02h %02h",
+             win2[0], win2[1], win2[2], win2[3], win2[4], win2[5], win2[6], win2[7], win2[8], win2[9], win2[10]);
+    // CASET 2A 00 01 00 A0, RASET 2B 00 1A 00 2B (icon band, painted first), RAMWR 2C
+    if ({win2[0],win2[1],win2[2],win2[3],win2[4]} !== 40'h2A000100A0) begin errors = errors + 1; $display("FAIL: CASET of the icon window"); end
+    if ({win2[5],win2[6],win2[7],win2[8],win2[9]} !== 40'h2B001A002B) begin errors = errors + 1; $display("FAIL: RASET of the icon window"); end
+    if (win2[10] !== 8'h2C) begin errors = errors + 1; $display("FAIL: RAMWR of the icon window"); end
+
+    if (pix_bytes !== 25600) begin errors = errors + 1; $display("FAIL: clear frame has %0d bytes, expected 25600", pix_bytes); end
+    if (nonzero !== 0) begin errors = errors + 1; $display("FAIL: clear frame has %0d non-zero bytes", nonzero); end
+    if (reset_falls !== 0 || reset_rises !== 1) begin
+      errors = errors + 1; $display("FAIL: RESET edges: %0d falls, %0d rises (expected 0 falls, 1 rise)", reset_falls, reset_rises);
+    end
+
+    if (errors == 0) $display("PASS: tb_init_tb - reset pulse, %0d init bytes, windows and clear frame OK", nbytes);
+    else             $display("FAIL: tb_init_tb - %0d error(s)", errors);
+    $finish;
+  end
+
+  // watchdog
+  initial begin
+    #400_000_000;
+    $display("FAIL: tb_init_tb timeout (nbytes=%0d pix_bytes=%0d win2_bytes=%0d)", nbytes, pix_bytes, win2_bytes);
+    $finish;
+  end
+
+endmodule

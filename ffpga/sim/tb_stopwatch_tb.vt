@@ -1,0 +1,212 @@
+// Self-checking testbench: stopwatch buttons, BCD time, status icon colours and rendered pixels
+// The LCD controller is modelled as an SPI slave that rebuilds every 160x50 window frame.
+`timescale 1ns / 1ps
+
+module tb_stopwatch_tb;
+
+  reg clk = 1'b0;
+  always #20 clk = ~clk;                       // 25 MHz
+
+  reg btn_start = 1'b1;                        // buttons idle high (internal pull-ups), active low
+  reg btn_stop  = 1'b1;
+
+  wire osc_en, osc_mode, pd_en, pd_s0, pd_s1, pd_s2, btn_pu0, btn_pu1;
+  wire tft_reset, tft_cs, tft_dc, tft_mosi, tft_clk;
+  wire oe_r, oe_c, oe_d, oe_m, oe_k;
+
+  main dut (
+    .i_clk(clk), .i_btn_start(btn_start), .i_btn_stop(btn_stop),
+    .o_btn_start_pu(btn_pu0), .o_btn_stop_pu(btn_pu1),
+    .o_osc_en(osc_en), .o_osc_mode(osc_mode), .o_postdiv0_en(pd_en),
+    .o_postdiv0_sel0(pd_s0), .o_postdiv0_sel1(pd_s1), .o_postdiv0_sel2(pd_s2),
+    .o_tft_reset(tft_reset), .o_tft_reset_oe(oe_r),
+    .o_tft_cs(tft_cs), .o_tft_cs_oe(oe_c),
+    .o_tft_dc(tft_dc), .o_tft_dc_oe(oe_d),
+    .o_tft_mosi(tft_mosi), .o_tft_mosi_oe(oe_m),
+    .o_tft_clk(tft_clk), .o_tft_clk_oe(oe_k)
+  );
+
+  // fast-forward the long LCD power-up waits
+  always @(posedge clk) begin
+    if (dut.u_lcd.state == 4'd0 && dut.u_lcd.t < 27'd2000000) dut.u_lcd.t = 27'd2097000;
+    if ((dut.u_lcd.state == 4'd1 || dut.u_lcd.state == 4'd5) && dut.u_lcd.t < 27'd8000000) dut.u_lcd.t = 27'd8388000;
+  end
+
+  // ---------------- LCD model: panel RAM addressed by CASET/RASET/RAMWR ----------------
+  // Writes land at the real screen position (column offset +1, row offset +26),
+  // so the checks below use plain screen coordinates whatever window was sent.
+  reg [15:0] scr [0:12799];                    // 160 x 80 pixels
+  reg [7:0]  sh;
+  reg [7:0]  cmd = 8'h00;
+  integer bits = 0, pcount = 0;
+  reg [15:0] col0 = 0, col1 = 0, row0 = 0, row1 = 0, cur_c = 0, cur_r = 0;
+  reg [7:0]  hi;
+  reg        half = 1'b0, in_ramwr = 1'b0;
+  event frame_done;                            // a text-band window finished
+  integer frames_seen = 0, icon_frames = 0, k;
+
+  initial for (k = 0; k < 12800; k = k + 1) scr[k] = 16'h0000;
+
+  always @(posedge tft_clk) if (!tft_cs) begin
+    sh = {sh[6:0], tft_mosi};
+    bits = bits + 1;
+    if (bits == 8) begin
+      bits = 0;
+      if (!tft_dc) begin
+        cmd = sh; pcount = 0; half = 1'b0;
+        in_ramwr = (sh == 8'h2C);
+        if (sh == 8'h2C) begin cur_c = col0; cur_r = row0; end
+      end else if (in_ramwr) begin
+        if (!half) begin hi = sh; half = 1'b1; end
+        else begin
+          half = 1'b0;
+          if (cur_c >= 1 && cur_c <= 160 && cur_r >= 26 && cur_r <= 105)
+            scr[(cur_r - 26)*160 + (cur_c - 1)] = {hi, sh};
+          if (cur_c == col1) begin
+            cur_c = col0; cur_r = cur_r + 1;
+            if (cur_r > row1) begin
+              in_ramwr = 1'b0;
+              if (row0 == 16'd55) begin frames_seen = frames_seen + 1; -> frame_done; end
+              else if (row0 == 16'd26 && row1 == 16'd43) icon_frames = icon_frames + 1;
+            end
+          end else cur_c = cur_c + 1;
+        end
+      end else begin
+        case ({cmd, pcount[2:0]})
+          {8'h2A, 3'd0}: col0[15:8] = sh;   {8'h2A, 3'd1}: col0[7:0] = sh;
+          {8'h2A, 3'd2}: col1[15:8] = sh;   {8'h2A, 3'd3}: col1[7:0] = sh;
+          {8'h2B, 3'd0}: row0[15:8] = sh;   {8'h2B, 3'd1}: row0[7:0] = sh;
+          {8'h2B, 3'd2}: row1[15:8] = sh;   {8'h2B, 3'd3}: row1[7:0] = sh;
+          default: ;
+        endcase
+        pcount = pcount + 1;
+      end
+    end
+  end
+
+  function [15:0] pix;
+    input integer row;
+    input integer col;
+    begin pix = scr[row*160 + col]; end
+  endfunction
+
+  function integer centis;
+    input dummy;
+    begin centis = ((dut.s1*10 + dut.s0)*100) + dut.c1*10 + dut.c0; end
+  endfunction
+
+  // ---------------- helpers ----------------
+  integer errors = 0;
+  integer checks = 0;
+
+  task check;
+    input cond;
+    input [8*60-1:0] msg;
+    begin
+      checks = checks + 1;
+      if (!cond) begin errors = errors + 1; $display("FAIL @%0t: %0s", $time, msg); end
+    end
+  endtask
+
+  task press_start; begin btn_start = 1'b0; #60_000_000; btn_start = 1'b1; end endtask
+  task press_stop;  begin btn_stop  = 1'b0; #60_000_000; btn_stop  = 1'b1; end endtask
+  task settle_frames; begin repeat (3) @(frame_done); end endtask
+
+  integer t1, t2, t3, t4;
+
+  initial begin
+    $dumpfile ("tb_stopwatch_tb.vcd");
+    $dumpvars (0, tb_stopwatch_tb);
+
+    // ---- power-up: stopped at 00:00.00, red square ----
+    wait (dut.armed);
+    settle_frames;
+    check(dut.smode == 2'd0, "power-up state is RESET");
+    check(centis(0) == 0, "power-up time is 00:00.00");
+    check(pix(10, 148) === 16'hF800, "reset icon centre is red");
+    check(pix(2, 140)  === 16'h0000, "icon corner pixel is black");
+    check(pix(29, 6)   === 16'hFFFF, "first digit '0' is white (row 29, col 6)");
+    check(pix(15, 70)  === 16'h0000, "area between icon and text is black");
+
+    // ---- start ----
+    press_start;
+    #300_000_000;
+    t1 = centis(0);
+    $display("running: %0d cs after ~330 ms", t1);
+    check(dut.smode == 2'd1 && dut.running, "start -> RUNNING");
+    check(t1 >= 28 && t1 <= 40, "time after ~330 ms is 0.28..0.40 s");
+    settle_frames;
+    check(pix(9, 145) === 16'h07E0, "running icon is green (triangle)");
+    check(pix(10, 148) === 16'h07E0, "triangle covers the centre");
+    check(pix(2, 140)  === 16'h0000, "triangle leaves the corner black");
+
+    // ---- pause ----
+    press_start;
+    #100_000_000;
+    t2 = centis(0);
+    #200_000_000;
+    t3 = centis(0);
+    $display("paused: %0d -> %0d cs", t2, t3);
+    check(dut.smode == 2'd2 && !dut.running, "second press -> PAUSED");
+    check(t2 == t3, "time is frozen while paused");
+    check(t2 > t1, "time advanced before pause");
+    settle_frames;
+    check(pix(8, 144) === 16'hFFE0, "paused icon is yellow (left bar)");
+    check(pix(8, 151) === 16'hFFE0, "paused icon is yellow (right bar)");
+    check(pix(8, 147) === 16'h0000, "gap between the bars is black");
+
+    // ---- resume ----
+    press_start;
+    #200_000_000;
+    t4 = centis(0);
+    $display("resumed: %0d cs (was %0d)", t4, t3);
+    check(dut.smode == 2'd1 && dut.running, "third press -> RUNNING again");
+    check(t4 >= t3 + 14 && t4 <= t3 + 30, "time continues from the paused value");
+    settle_frames;
+    check(pix(9, 145) === 16'h07E0, "green icon after resume");
+
+    // ---- digit roll-over 99:59.99 -> 00:00.00 ----
+    @(negedge clk);
+    dut.u_sw.m1 = 4'd9; dut.u_sw.m0 = 4'd9; dut.u_sw.s1 = 4'd5; dut.u_sw.s0 = 4'd9; dut.u_sw.c1 = 4'd9; dut.u_sw.c0 = 4'd9;
+    #25_000_000;
+    check(dut.u_sw.m1 == 0 && dut.u_sw.m0 == 0 && dut.u_sw.s1 == 0 && dut.u_sw.s0 == 0 && dut.u_sw.c1 <= 2, "99:59.99 rolls over to 00:00.0x");
+
+    // ---- BCD carries: 00:09.99 -> 00:10.00 and 00:59.99 -> 01:00.00 ----
+    @(negedge clk);
+    dut.u_sw.m1 = 4'd0; dut.u_sw.m0 = 4'd0; dut.u_sw.s1 = 4'd0; dut.u_sw.s0 = 4'd9; dut.u_sw.c1 = 4'd9; dut.u_sw.c0 = 4'd9;
+    #25_000_000;
+    check(dut.u_sw.s1 == 1 && dut.u_sw.s0 == 0 && dut.u_sw.m0 == 0, "00:09.99 carries to 00:10.xx");
+    @(negedge clk);
+    dut.u_sw.m1 = 4'd0; dut.u_sw.m0 = 4'd0; dut.u_sw.s1 = 4'd5; dut.u_sw.s0 = 4'd9; dut.u_sw.c1 = 4'd9; dut.u_sw.c0 = 4'd9;
+    #25_000_000;
+    check(dut.u_sw.m0 == 1 && dut.u_sw.s1 == 0 && dut.u_sw.s0 == 0, "00:59.99 carries to 01:00.xx");
+
+    // ---- stop + reset while running ----
+    press_stop;
+    #100_000_000;
+    check(!dut.running && dut.smode == 2'd0, "stop -> RESET state");
+    check(centis(0) == 0 && dut.u_sw.m0 == 0 && dut.u_sw.m1 == 0, "stop clears the time");
+    settle_frames;
+    check(pix(10, 148) === 16'hF800, "red icon after stop");
+    check(pix(29, 6)   === 16'hFFFF, "digits show 00:00.00 after stop");
+
+    // ---- stop from the paused state ----
+    press_start; #100_000_000; press_start; #50_000_000;
+    check(dut.smode == 2'd2, "start, pause again");
+    press_stop; #50_000_000;
+    check(dut.smode == 2'd0 && centis(0) == 0, "stop from PAUSED resets");
+
+    $display("checks: %0d, text frames: %0d, icon frames: %0d", checks, frames_seen, icon_frames);
+    if (errors == 0) $display("PASS: tb_stopwatch_tb - all %0d checks OK", checks);
+    else             $display("FAIL: tb_stopwatch_tb - %0d of %0d checks failed", errors, checks);
+    $finish;
+  end
+
+  // watchdog
+  initial begin
+    #3_000_000_000;
+    $display("FAIL: tb_stopwatch_tb timeout");
+    $finish;
+  end
+
+endmodule
